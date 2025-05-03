@@ -18,7 +18,7 @@ class TextRequest(BaseModel):
 
 # ——— Prediction logic ———
 def predict_symptoms(text: str, model, labels: list, threshold: float = 0.3):
-    cls_repr = embed_text(text)
+    cls_repr = embed_text(text)  # Lazy-load MuRIL model here
     with torch.no_grad():
         logits = model(cls_repr)
         probs = torch.sigmoid(logits).squeeze(0)
@@ -34,8 +34,10 @@ async def predict_anxiety(req: TextRequest):
     model.load_state_dict(torch.load("anxiety.pth", map_location="cpu"))
     model.eval()
 
+    # Run prediction
     predicted = predict_symptoms(req.text, model, anxiety_labels)
 
+    # Clear model and cache
     del model
     torch.cuda.empty_cache()
 
