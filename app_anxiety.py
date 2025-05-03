@@ -1,45 +1,48 @@
-# app_anxiety.py
 from fastapi import FastAPI
 from pydantic import BaseModel
 import torch
-import torch.nn as nn
-from common import embed_text
+from common import MultiLabelNet, embed_text
 
-# --- FastAPI app ---
+# ——— FastAPI setup ———
 app = FastAPI()
 
-# --- Anxiety model definition ---
-class MultiLabelNet(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc1 = nn.Linear(768, 256)
-        self.act = nn.ReLU()
-        self.fc2 = nn.Linear(256, 7)
-
-    def forward(self, x):
-        return self.fc2(self.act(self.fc1(x)))
-
-# Load model only once
-model = MultiLabelNet()
-model.load_state_dict(torch.load("anxiety.pth", map_location="cpu"))
-model.eval()
-
-# Labels
-labels = [
-    "Symptom 10", "Symptom 11", "Symptom 12",
-    "Symptom 13", "Symptom 14", "Symptom 15", "Symptom 16"
+# ——— Symptom labels for Anxiety ———
+anxiety_labels = [
+    "Symptom 10", "Symptom 11", "Symptom 12", "Symptom 13", 
+    "Symptom 14", "Symptom 15", "Symptom 16"
 ]
 
-# --- Request schema ---
+# ——— Request schema ———
 class TextRequest(BaseModel):
     text: str
 
-# --- Prediction endpoint ---
-@app.post("/predict/")
-def predict(req: TextRequest):
-    x = embed_text(req.text)
+# ——— Prediction logic ———
+def predict_symptoms(text: str, model, labels: list, threshold: float = 0.3):
+    cls_repr = embed_text(text)
     with torch.no_grad():
-        logits = model(x)
+        logits = model(cls_repr)
         probs = torch.sigmoid(logits).squeeze(0)
-        predicted = [lab for lab, p in zip(labels, probs) if p > 0.3]
+
+    mask = (probs > threshold).tolist()
+    predicted = [lab for lab, keep in zip(labels, mask) if keep]
+    return predicted
+
+# ——— API endpoint ———
+@app.post("/predict/")
+async def predict_anxiety(req: TextRequest):
+    model = MultiLabelNet(input_dim=768, output_dim=7)
+    model.load_state_dict(torch.load("anxiety.pth", map_location="cpu"))
+    model.eval()
+
+    predicted = predict_symptoms(req.text, model, anxiety_labels)
+
+    del model
+    torch.cuda.empty_cache()
+
     return {"predicted_symptoms": predicted}
+
+# ——— Uvicorn (for local dev only) ———
+if __name__ == "__main__":
+    import uvicorn, os
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
